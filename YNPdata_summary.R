@@ -4,6 +4,7 @@ setwd("C:\\Users\\fridley\\OneDrive - Clemson University\\academic\\projects\\YN
 
 #update from Doug, 12-20-22
 dat = read.csv("dat2b.csv")
+
 dat$hits.pin = as.numeric(as.character(dat$hits.pin))
 dat$mo.cons = as.numeric(as.character(dat$mo.cons))
 dat$mo.stim = as.numeric(as.character(dat$mo.stim))
