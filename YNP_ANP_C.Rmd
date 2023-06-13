@@ -1,0 +1,428 @@
+---
+title: "YNP productivity and consumption"
+author: "Jason Fridley"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=F)
+```
+
+This document summarizes monthly ANP (aboveground net productivity, g/m2) and monthly consumption by grazers (g/m2) from the YNP dataset, across sites and years. ANP is calculated as the difference in standing biomass between a temporary exclosure (te) plot and its initial biomass, estimated as the biomass of the grazed grassland for the prior sample period. Because observation intervals vary, productivity is calculated at the daily scale before adjusting to monthly values. Consumption (C) is calculated as the difference in biomass between grazed (gr) plots and exclosure (te) plots during the same period. There are as many as 12 replicate samples per site per period; calculations take the average value before taking differences. 
+
+### YNP dataset
+
+This is the version Doug sent on March 21, 2023. The May 31 version has some differences to data columns that need discussion. 
+
+```{r}
+setwd("C:\\Users\\fridley\\OneDrive - Clemson University\\academic\\projects\\YNP_Doug")
+dat = read.csv("dat_03-21-23.csv")
+
+#tidy up columns
+dat$hits.pin = as.numeric(as.character(dat$hits.pin))
+dat$mo.cons = as.numeric(as.character(dat$mo.cons))
+dat$mo.stim = as.numeric(as.character(dat$mo.stim))
+dat$soilc = as.numeric(as.character(dat$soilc))
+dat$clay = as.numeric(as.character(dat$clay))
+dat$silt = as.numeric(as.character(dat$silt))
+dat$gs.temp = as.numeric(as.character(dat$gs.temp))
+#str(dat)
+
+```
+
+The first step is to simplify the dataset, taking means (and standard errors) across replicates. I then created an output data frame for calculations, using all possible combinations of site, year, and sample period (1-7). The data are imbalanced so many NA values will be subsequently ignored.
+
+```{r}
+
+#aggregate data
+library(doBy)
+meanf = function(x) {mean(x,na.rm=T)}
+sef = function(x) {sd(x,na.rm=T) / sqrt(length(x))}
+datb = dat[is.element(dat$sample.,1:7),]
+dat2 = summaryBy( totshtbiom ~ yr + site + sample. + trt + days.1 + juldate, data = datb, FUN=c(meanf,sef) )
+str(dat2)
+
+#create new matrix for ANP and C data
+years = unique(dat2$yr)
+site = unique(dat2$site)
+sample = unique(as.factor(dat2$sample.))
+newdat = expand.grid(site,years,sample); names(newdat) = c("site","year","sample")
+newdat$dANP = NA #will be filled
+newdat$dC = NA #will be filled
+```
+
+Calculations were performed separately for the first sample period (=1), where ANP and te biomass were assumed equivalent (converted to daily values). If the 'tr' sample was missing, I presumed this meant grazers were absent and thus ANP could be calculated with 'gr' treatment values. For all sample periods, whenever 'te' and 'gr' treatments were both available, I calculated consumption as the difference, corrected for differences in days of observation. Calculations were performed in two loops:
+
+```{r, warning=F, message=F}
+
+#add dANP and dC for sample 1
+for(i in 1:dim(newdat)[1]) {
+  x = newdat[i,]
+  yr = x$year; si = as.character(x$site); sa = x$sample
+  if(sa!=1) next
+  
+  #calculate daily ANP for sample period 1, using just te biomass
+  biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="te"]
+  days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="te"]
+  if(length(days.x)==0) days.x = 28 #if missing assume 28 d
+  #if there is no te treatment, use gr instead (presumed no grazers around)
+  if(length(biomass.mean.x)==0) biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"]
+  if(length(biomass.mean.x)==0) next
+  newdat$dANP[i] = biomass.mean.x/days.x
+  
+  #calculate consumption: compare current te value to current gr value
+  biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="te"]
+  if(length(biomass.mean.x)==0) next
+  grbiomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"]
+  if(length(grbiomass.mean.x)==0) next
+  newdat$dC[i] = (biomass.mean.x - grbiomass.mean.x) / days.x
+}
+
+#add dANP and dC for samples 2-7
+for(s in 2:7) { #loop over samples
+  for(i in 1:dim(newdat)[1]) {
+    x = newdat[i,]
+    yr = x$year; si = as.character(x$site); sa = x$sample
+    if(sa!=s) next
+    
+    #calculate daily ANP: compare current te value to grazed value from last sample period
+    biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"]
+    days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"]
+    if(length(days.x)==0) days.x = 28 #if missing assume 28 d
+    #if there is no te treatment, use gr instead (presumed no grazers around) and set dC to zero
+    if(length(biomass.mean.x)==0) {biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="gr"]; newdat$dC[i] = 0}
+    if(length(biomass.mean.x)==0) next
+    s1 = s-1 #last sample period
+    grbiomass.last.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s1&dat2$trt=="gr"]
+    if(length(grbiomass.last.mean.x)==0) next
+    newdat$dANP[i] = (biomass.mean.x - grbiomass.last.mean.x ) /  days.x
+    
+    #calculate consumption: compare current te value to current gr value
+    biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"]
+    if(length(biomass.mean.x)==0) next
+    grbiomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="gr"]
+    if(length(grbiomass.mean.x)==0) next
+    if(!is.na(newdat$dC[i])) next #if already filled above with zero, skip
+    newdat$dC[i] = (biomass.mean.x - grbiomass.mean.x) / days.x
+    
+  } 
+} #close sample loop
+
+#convert daily to monthly values
+newdat$mANP = newdat$dANP*28
+newdat$mC = newdat$dC*28
+
+```
+
+Do these values make sense? Plotting C vs. ANP, with earlier season values darker gray (note, values at the bottom are those presumed to have zero consumption due to missing te treatment):
+
+```{r,warning=F}
+
+cols = gray.colors(7)[as.numeric(newdat$sample)]
+par(mfrow=c(1,1),mar=c(5,5,1,1))
+boxplot(mANP ~ sample,newdat)
+boxplot(mC[mC!=0] ~ sample[mC!=0],newdat) #omit zeros to see boxes
+plot(newdat$mANP+.1,newdat$mC+.1,log="xy",col=cols,cex=1.5,lwd=2,ylab="Monthly Consumption, g/m2",xlab="Monthly ANP, g/m2")
+abline(0,1)
+legend("topleft",legend=c(1:7),text.col=gray.colors(7))
+```
+
+This indicates that consumption values are higher for higher ANP values early in the growing season. Later in the year, consumption is often greater than ANP, suggesting old biomass is being consumed. Is this accurate?
+
+And here is consumption as a (log) proportion of ANP, same colors as above. Consumption is proportionally low early in the growing season but much higher (approaching 100%) later in the season. As expected?
+
+```{r}
+#Consumption as a (log) proportion of ANP:
+plot(newdat$mANP,newdat$mC/newdat$mANP,log="y",col=cols,cex=1.5,lwd=2,ylab="Log mC/mANP",xlab="Monthly ANP, g/m2")
+
+
+```
+
+
+### Modeling ANP and C
+
+We can add predictors to the ANP-C dataframe to create explanatory models. 
+
+```{r}
+dat.env = datb[,c("yr","site","sample.","soilc","soiln","clay","silt","mo.ppt","mo.temp","elevation")]
+  names(dat.env)[1:3] = c("year","site","sample")
+nd = merge(newdat,dat.env,all.x=T,all.y=F)
+nd = nd[!is.na(nd$mANP),] #exclude all rows with missing ANP data
+nd = nd[duplicated(nd)==F,] #remove duplicate rows
+```
+
+#### Doug's Question 1. *How does aboveground production during the sampling periods (measured every 3-5 weeks) vary during the snow free season, from snowmelt to the last Sept-Oct sample date, and how do those dynamics vary with elevation, temp, precipitation, soil texture (i.e., clay content) and soil C?*
+
+Here are a set of graphs that show monthly ANP for each sample period, for each site-year available. The first batch is is for 1988-1989 data:
+
+```{r}
+
+#We can have a look at every site for each year sampled:
+tab = table(nd$site,nd$year)
+tab
+
+nd$sample = as.numeric(nd$sample)
+
+#1988 and 1989
+s = rownames(tab)[1:13]
+par(mfrow=c(7,4),mar=rep(.6,4),oma=c(1,1,2,1))
+for(i in 1:13) {
+  site = s[i]
+  if(length(nd$sample[nd$site==site&nd$year==1988])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==1988],nd$mANP[nd$site==site&nd$year==1988],type="b",xlab="Sample",ylab="mANP",xlim=c(1,6),axes=F,xpd=T); mtext("",line=-1,cex=.5); mtext(site,side=2,cex=.8)
+  if(i==1) mtext("1988",side=3,cex=1,line=0)
+  if(i==2) mtext("1988",side=3,cex=1,line=0)
+    if(length(nd$sample[nd$site==site&nd$year==1989])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==1989],nd$mANP[nd$site==site&nd$year==1989],type="b",xlab="Sample",ylab="mANP",xlim=c(1,6),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==1) mtext("1989",side=3,cex=1,line=0)
+  if(i==2) mtext("1989",side=3,cex=1,line=0)
+}
+
+```
+
+With only two exceptions, peak biomass is at the first sample period. Here is for sites 1999-2001, which suggest a more diverse set of responses:
+
+```{r}
+
+#1999, 2000, 2001
+s = rownames(tab)[c(1,14:22)]
+par(mfrow=c(5,3),mar=rep(.6,4),oma=c(1,1,2,1))
+for(i in 1:5) {
+  site = s[i]
+  if(length(nd$sample[nd$site==site&nd$year==1999])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==1999],nd$mANP[nd$site==site&nd$year==1999],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5); mtext(site,side=2,cex=.8)
+  if(i==1) mtext("1999",side=3,cex=1,line=0)
+    if(length(nd$sample[nd$site==site&nd$year==2000])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2000],nd$mANP[nd$site==site&nd$year==2000],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==1) mtext("2000",side=3,cex=1,line=0)
+      if(length(nd$sample[nd$site==site&nd$year==2001])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2001],nd$mANP[nd$site==site&nd$year==2001],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==1) mtext("2001",side=3,cex=1,line=0)
+}
+
+par(mfrow=c(5,3),mar=rep(.6,4),oma=c(1,1,2,1))
+for(i in 6:10) {
+  site = s[i]
+  if(length(nd$sample[nd$site==site&nd$year==1999])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==1999],nd$mANP[nd$site==site&nd$year==1999],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5); mtext(site,side=2,cex=.8)
+  if(i==6) mtext("1999",side=3,cex=1,line=0)
+    if(length(nd$sample[nd$site==site&nd$year==2000])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2000],nd$mANP[nd$site==site&nd$year==2000],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==6) mtext("2000",side=3,cex=1,line=0)
+      if(length(nd$sample[nd$site==site&nd$year==2001])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2001],nd$mANP[nd$site==site&nd$year==2001],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==6) mtext("2001",side=3,cex=1,line=0)
+}
+
+```
+
+And finally here are the six sites for 2012-2014, which conform more to the 1988-89 patterns:
+
+```{r}
+
+#2012, 2013, 2014
+s = rownames(tab)[c(1,23:27)]
+par(mfrow=c(6,3),mar=rep(.6,4),oma=c(1,1,2,1))
+for(i in 1:6) {
+  site = s[i]
+  if(length(nd$sample[nd$site==site&nd$year==2012])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2012],nd$mANP[nd$site==site&nd$year==2012],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5); mtext(site,side=2,cex=.8)
+  if(i==1) mtext("2012",side=3,cex=1,line=0)
+    if(length(nd$sample[nd$site==site&nd$year==2013])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2013],nd$mANP[nd$site==site&nd$year==2013],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==1) mtext("2013",side=3,cex=1,line=0)
+      if(length(nd$sample[nd$site==site&nd$year==2014])==0) plot(0,0,type="n",axes=F) else plot(nd$sample[nd$site==site&nd$year==2014],nd$mANP[nd$site==site&nd$year==2014],type="b",xlab="Sample",ylab="mANP",xlim=c(1,7),axes=F,xpd=T); mtext("",line=-1,cex=.5)
+  if(i==1) mtext("2014",side=3,cex=1,line=0)
+}
+
+```
+
+_Modeling at the monthly scale_. Because monthly climate have been provided, a first approach to addressing seasonal changes in ANP is using a monthly time step model, accounting for dependencies across sites within years, and across years within sites (crossed random effects of year and site). And we need an initial check of whether predictors are correlated. 
+
+```{r}
+
+#correlation matrix of predictors
+cor(nd[,8:14],use = "pairwise.complete.obs")
+
+#the only problem I see here is soilc and soiln:
+plot(nd$soiln,nd$soilc)
+#many soilc values are missing anyway, so we'll stick with soiln
+
+#main effects only:
+library(lme4)
+library(lmerTest)
+library(performance) #for nakagawa's R2
+lme1 = lmer(mANP ~ soiln + clay + silt + mo.ppt + mo.temp + elevation + (1|year) + (1|site), data=nd)
+summary(lme1)
+
+```
+
+There is a strong positive main effect of precip, and a weak positive main effect of silt. Does it make sense to include interactions? For example:
+
+```{r}
+
+lme2 = lmer(mANP ~ scale(silt)*scale(mo.ppt)*scale(mo.temp) + (1|year) + (1|site), data=nd)
+summary(lme2)
+
+lme3 = lmer(mANP ~ scale(silt) + scale(mo.ppt) + (1|year) + (1|site), data=nd)
+summary(lme3)
+r2_nakagawa(lme3)
+
+```
+
+Apparently not. Together, silt and precip account for about 28% of the variance in mANP. But if we add in sample period, we get a much better model (38% R2). Sample 1 values are in blue:
+
+```{r}
+lme4 = lmer(mANP ~ scale(silt) + scale(mo.ppt)*scale(sample) + (1|year) + (1|site), data=nd)
+summary(lme4)
+r2_nakagawa(lme4)
+
+par(mfrow=c(1,1),mar=c(5,5,1,1))
+cols = gray.colors(7)[as.numeric(nd$sample)]
+plot(nd$mo.ppt,nd$mANP,xlab="Monthly rainfall, mm",ylab="Monthly ANP, g/m2",col=cols)
+points(nd$mo.ppt[nd$sample==1],nd$mANP[nd$sample==1],col="blue")
+plot(nd$silt,nd$mANP,xlab="Silt %",ylab="Monthly ANP, g/m2",col=cols)
+points(nd$silt[nd$sample==1],nd$mANP[nd$sample==1],col="blue")
+```
+
+_Jason's Questions for Doug about Question 1_
+
+1. Should we consider other models for monthly ANP?
+2. Are there interactions of interest a priori?
+3. Is it legit to consider biomass of sample 1 ANP? Ie, do we know the duration of growth for sample 1? These are clearly outliers.
+
+
+#### Doug's Question 2. *How does grazing intensity affect aboveground production during sampling periods and how do those animal effects interact with the climate and site factors?*
+
+I have a few questions here about methods:
+1. What is the best metric of grazing intensity? Is it C as a proportion of ANP (0-1)?
+2. How do you typically test for priming of ANP by grazing at the short-term (te) scale? If there is enough natural variation in grazing intensity across sites, can you model ANP as a function of %C during the previous sample period?
+
+Here is an example using these assumptions:
+
+```{r}
+nd$pmC = nd$mC / nd$mANP #consumption as a proportion of ANP
+summary(nd$pmC)
+nd$pmC[nd$pmC==-Inf] = NA #convert div0 to NA
+nd$pmC[nd$pmC==Inf] = NA #convert div0 to NA
+
+#should values below 0 or above 1 be considered or removed? these are cases where grazers ate more than estimated ANP
+#for now, I'll change to NA
+nd$pmC[nd$pmC<0 | nd$pmC > 1] = NA
+summary(nd$pmC)
+length(nd$pmC) #44% are NA
+
+#create a column that, for each row, is the pmC of the previous sample period
+nd$pmC1 = NA #fill column
+for(i in 1:dim(nd)[1]) {
+  if(nd$sample[i]==1) next #ignore sample period 1
+  si = nd$site[i]; yr = nd$year[i]; sa = nd$sample[i] - 1
+  if(length(nd$pmC[nd$site==si&nd$year==yr&nd$sample==sa])==0) next
+  nd$pmC1[i] = nd$pmC[nd$site==si&nd$year==yr&nd$sample==sa]
+}
+
+#note some duplicate values for site env factors in nd: can Doug check these?
+
+#Building off of lme3 (silt and precip), and including previous sample period grazing intensity:
+lme4 = lmer(mANP ~ scale(silt) * scale(mo.ppt) * scale(pmC1) + (1|year) + (1|site), data=nd)
+summary(lme4)
+
+```
+
+No evidence for previous-month consumption effects, but I'm probably making poor assumptions here. *How to improve?*
+
+#### Doug's Question 3. *How is annual aboveground production (ANPP) determined by climate (different growing season ppt and water year ppt amounts measured during different years), elevation, and site soil properties (texture, C)?*
+
+Here I've created an annual dataset by using the provided annual climate variables and summing ANP across sample periods. This gives a sample size of about 60 site-years. Is this correct?
+
+```{r}
+#summarize to annual
+library(doBy)
+sumf = function(x) {sum(x,na.rm=T)}
+ndA = summaryBy (mANP + mC ~ year + site, data = newdat, FUN = sumf )
+  names(ndA)[c(3,4)] = c("ANPP","annualC")
+ndA = ndA[ndA$ANPP>0,] #only 60-odd site-years available, omit NAs
+hist(ndA$ANPP,breaks=20) #does this look reasonable for ANPP values?
+
+#merge annual and site values
+dat.env2 = datb[,c("yr","site","soilc","soiln","clay","silt","wateryr.ppt","gsyr.ppt","elevation")]
+  names(dat.env2)[1:2] = c("year","site")
+ndA2 = merge(ndA,dat.env2,all.x=T,all.y=F)  
+ndA2 = ndA2[duplicated(ndA2)==F,] 
+dim(ndA2)  
+
+#some site-years have multiple values for soil texture; simplify to mean
+meanf = function(x) {mean(x,na.rm=T)}
+ndA3 = summaryBy (. ~ year + site, data = ndA2, FUN = meanf , keep.names=T)
+str(ndA3)
+summary(ndA3$clay) #about half missing
+summary(ndA3$silt) #about half missing
+summary(ndA3$soilc) #25 missing
+summary(ndA3$soiln)
+dim(ndA3)
+```
+
+Here is an annual modeling approach similar to that above:
+
+```{r}
+cor(ndA3[,5:11],use="pairwise.complete.obs")
+  #omit soilc again, and see whether gsyr.ppt or wateryr.ppt is a better precip variable
+cor(ndA3[,c(3,9,10)])
+  #slightly higher correlation of ANPP with gsyr.ppt
+
+library(lme4)
+lme1 = lmer(ANPP ~ scale(silt)*scale(gsyr.ppt)*scale(elevation) + (1|year) + (1|site), data=ndA3)
+summary(lme1)
+  #all three factors probably important, incl. interation of silt and precip
+r2_nakagawa(lme1)
+  #fixed effects explain 86% of the annual variance
+```
+
+Silt and growing season rainfall are impressive predictors, but note missing values for silt reduce the dataset quite a bit (28 values).
+  
+#### Doug's Question 4. *How does grazing determine ANPP and interact with the same climate (growing season, water yr) and site (elevation, soil) factors. Note that you’ll need to use the “pe” (permanent exclosure) treatment to calculate the grazing effect-we’ll need to probably talk about this.*
+
+I'll assume that we use the same model as for 3, but also include the ANPP estimates for the pe treatment. This is straightforward except for the calculation of ANPP--final (or peak) biomass or sum of individual biomass gains per sample period?
+
+```{r}
+#grab pe treatments
+dpe = dat[dat$trt=="pe",]
+
+#simplify to mean biomass per sample period
+meanf = function(x) {mean(x,na.rm=T)}
+sef = function(x) {sd(x,na.rm=T) / sqrt(length(x))}
+dpe2 = summaryBy( totshtbiom ~ yr + site + sample. + days.1 + juldate, data = dpe, FUN=c(meanf,sef) , keep.names=T)
+str(dpe2)
+table(dpe2$site,dpe2$yr)
+
+#assume ANPP is estimated by peak (max) biomass
+maxf = function(x) {max(x,na.rm=T)}
+dpe3 = summaryBy( totshtbiom.meanf ~ yr + site, data = dpe2, FUN=c(maxf), keep.names=T)
+names(dpe3)[c(1,3)] = c("year","ANPP.pe")
+par(mfrow=c(1,1))
+boxplot(ANPP.pe ~ site + year, dpe3) #range of values for 39 site-years for pe treatment
+
+#add pe values to ndA3 dataset
+annual = merge(ndA3,dpe3,all.x=T)
+
+```
+
+Here is the relationship between ANPP on grazed lands vs. ANPP on permanent exclosures, darker colors are years of more rainfall.
+
+```{r}
+cols = gray.colors(20)[cut(annual$gsyr.ppt,8)]
+plot(annual$ANPP.pe,annual$ANPP,col=cols,pch=19,cex=1.5)
+abline(0,1)
+
+```
+
+I'll make a new dependent variable that is the difference between ANPP and ANPP.pe, and model this as we did above.
+
+```{r}
+
+annual$Adiff = annual$ANPP - annual$ANPP.pe #positive values indicate grazer stimulation
+hist(annual$Adiff)
+#note many missing silt values; ignoring for now
+
+library(lme4)
+lme1 = lmer(Adiff ~ scale(gsyr.ppt) + scale(soiln) + scale(elevation) + (1|year) + (1|site), data=annual)
+summary(lme1)
+  #no effects
+```
+
+This is probably many bad assumptions, please set me straight!
+
+
