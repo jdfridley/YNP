@@ -1,0 +1,511 @@
+---
+title: "YNP Opus: publication structure"
+author: "Jason Fridley"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+        collapsed: false
+        smooth_scroll: true
+    theme: journal
+    number_sections: false
+    code_folding: hide
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+```{=html}
+<style type="text/css">
+  body{
+  font-size: 12pt;
+}
+</style>
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is based on Doug's email of 1-4-24. Water balance and snowmelt variables were added on 1-26-24.
+
+Use 'revised122321_JDF.R' for more details on relevant stat models.
+
+# Datasets
+
+This imports Doug's latest spreadsheet, and creates a new dataset that is aggregated by year-month-site.
+
+```{r, warning=F}
+
+setwd("C:\\Users\\fridley\\OneDrive - Clemson University\\academic\\projects\\YNP_Doug")
+#setwd("/Users/fridley/OneDrive - Clemson University/academic/projects/YNP_Doug")
+
+#setwd("C://Users/dafrank/OneDrive - Syracuse University/Desktop/2023 OPUS/Data/fielddata/Composite")
+
+#dat<-read.csv(file="datcorrected1016.csv")
+#dat<-read.csv(file="dat011624.csv")
+
+#'dat' is from datcorrected1016.csv, with water balance variables added from the script:
+  #'water_balance_YNPsites.R'
+load("YNP_Jan25.RData")
+
+lat = read.csv("latitudes.csv")
+
+#tidy up columns
+dat$hits.pin = as.numeric(as.character(dat$hits.pin))
+dat$soilc = as.numeric(as.character(dat$soilc))
+dat$clay = as.numeric(as.character(dat$clay))
+dat$silt = as.numeric(as.character(dat$silt))
+dat$prism.pptday = as.numeric(as.character(dat$prism.pptday))
+dat$prismint.temp = as.numeric(as.character(dat$prismint.temp))
+dat$Pwy.prism = as.numeric(as.character(dat$Pwy.prism))
+dat$Pgsppt.prism = as.numeric(as.character(dat$Pgsppt.prism))
+dat$percDead = as.numeric(as.character(dat$percDead))
+dat$lfnppm = as.numeric(as.character(dat$lfnppm))
+dat$npjuldate = as.numeric(as.character(dat$npjuldate))
+
+#this fills in the latitude of each site
+dat$lat = NULL
+for(i in 1:dim(dat)[1]) {
+  dat$lat[i] = lat$latitude[lat$site==dat$site[i]]
+}
+
+#aggregate data by year, month, site, and treatment
+library(doBy)
+meanf = function(x) {mean(x,na.rm=T)}
+sef = function(x) {sd(x,na.rm=T) / sqrt(length(x))}
+datb = dat[is.element(dat$sample.,1:7),]
+dat2 = summaryBy( totshtbiom + percDead + npjuldate + lfnppm + postmelt~ yr + site + sample. + trt + days.1 + juldate, data = datb, FUN=c(meanf,sef) )
+```
+
+This calculates monthly aboveground net production (ANP) and consumption (C).
+
+```{r warning=F}
+#create new matrix for ANP and C data
+years = unique(dat2$yr)
+site = unique(dat2$site)
+sample = unique(as.factor(dat2$sample.))
+newdat = expand.grid(site,years,sample); names(newdat) = c("site","year","sample")
+newdat$dANP = NA #will be filled
+newdat$dC = NA #will be filled
+newdat$days = NA #will be filled
+newdat$ANP = NA #will be filled
+newdat$C = NA #will be filled
+newdat$PpercDead = NA
+
+#add dANP, dC, and previous percent dead for sample 1
+for(i in 1:dim(newdat)[1]) {
+  #for(i in 1:3) {
+  x = newdat[i,]
+  yr = x$year; si = as.character(x$site); sa = x$sample
+ # prex = x
+#  print (prex)
+  if(sa!=1) next
+  #postx= x
+  #print(postx)
+  
+  #calculate average percent dead biomass, just gr treatments- Doug changed to "gr" from "te"
+  newdat$percDead[i] = mean(dat2$percDead.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"],na.rm=T)
+  
+  #calculate daily ANP for sample period 1, using just te biomass
+  biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="te"]
+  days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="te"]
+  #if(length(days.x)==0) days.x = 28 #if missing assume 28 d
+  #if there is no te treatment, use gr instead (presumed no grazers around)
+  if(length(biomass.mean.x)==0) biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"]
+  if(length(days.x)==0) days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"]
+  #print (biomass.mean.x)
+  #print(days.x)
+  if(length(biomass.mean.x)==0) next
+  
+  newdat$dANP[i] = biomass.mean.x/days.x
+  newdat$PpercDead[i] = 0
+  newdat$days[i] = days.x
+  newdat$ANP[i] = biomass.mean.x #add ANP to be used for calculating ANPP
+  
+  #calculate consumption: compare current te value to current gr value
+  biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="te"]
+  if(length(biomass.mean.x)==0) {newdat$dC[i] = 0; newdat$C[i] = 0}
+  if(length(biomass.mean.x)==0) next
+  grbiomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"]
+  if(length(grbiomass.mean.x)==0) next
+  newdat$dC[i] = (biomass.mean.x - grbiomass.mean.x) / days.x
+  newdat$C[i] = biomass.mean.x - grbiomass.mean.x 
+}
+
+#add dANP and dC for samples 2-7
+for(s in 2:7) { #loop over samples
+  for(i in 1:dim(newdat)[1]) {
+    x = newdat[i,]
+    yr = x$year; si = as.character(x$site); sa = x$sample
+    if(sa!=s) next
+    
+    #calculate average percent dead biomass, just te treatments
+    #newdat$percDead[i] = mean(dat2$percDead.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"],na.rm=T)
+    
+    #Doug changed to % dead biomass for "gr"
+    newdat$percDead[i] = mean(dat2$percDead.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="gr"],na.rm=T)
+    
+    #calculate daily ANP: compare current te value to grazed value from last sample period
+    biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"]
+   # days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"]
+    days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="gr"]
+    #if(length(days.x)==0) days.x = 28 #if missing assume 28 d
+    #if there is no te treatment, use gr instead (presumed no grazers around) and set dC and C to zero
+    if(length(biomass.mean.x)==0) {biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="gr"]; newdat$dC[i] = 0;newdat$C[i] = 0 }
+    if(length(days.x)==0) days.x = dat2$days.1[dat2$yr==yr&dat2$site==si&dat2$sample.==1&dat2$trt=="gr"]
+    
+   if(length(biomass.mean.x)==0) next
+    s1 = s-1 #last sample period
+    grbiomass.last.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s1&dat2$trt=="gr"]
+    Pdead = dat2$percDead.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s1&dat2$trt=="gr"]
+    if(length(grbiomass.last.mean.x)==0) next
+    newdat$dANP[i] = (biomass.mean.x - grbiomass.last.mean.x ) /  days.x
+    newdat$days[i] = days.x
+    newdat$PpercDead[i] <- Pdead
+  
+    newdat$ANP[i] = biomass.mean.x - grbiomass.last.mean.x  #add ANP to be used for calculating ANPP
+    
+    #calculate consumption: compare current te value to current gr value
+    biomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="te"]
+    
+    if(length(biomass.mean.x)==0) next
+    grbiomass.mean.x = dat2$totshtbiom.meanf[dat2$yr==yr&dat2$site==si&dat2$sample.==s&dat2$trt=="gr"]
+    if(length(grbiomass.mean.x)==0) next
+    if(!is.na(newdat$dC[i])) next #if already filled above with zero, skip
+    newdat$dC[i] = (biomass.mean.x - grbiomass.mean.x) / days.x
+    newdat$C[i] = biomass.mean.x - grbiomass.mean.x 
+  } 
+} #close sample loop
+
+#convert daily to monthly values
+newdat$mANP = newdat$dANP*28
+newdat$mC = newdat$dC*28
+```
+
+This adds predictors to the data frame, and renames the monthly dataset 'nd'.
+
+```{r warning=F}
+dat.env = datb[,c("yr","site","sample.","soilc","soiln","clay","silt","prism.pptday","prismint.temp","watbal","spei","postmelt","siteelevation","Pwy.prism","Pgsppt.prism","lfnppm","npjuldate")]
+names(dat.env)[1:3] = c("year","site","sample")
+nd = merge(newdat,dat.env,all.x=T,all.y=F)
+nd = nd[!is.na(nd$mANP),] #exclude all rows with missing ANP data
+nd = nd[duplicated(nd)==F,] #remove duplicate rows
+nd$mANP1<-nd$mANP
+nd$mANP1[nd$mANP<0] = NA
+nd$sample = as.numeric(nd$sample)
+```
+
+This calculates grazing intensity and adds it to 'nd'.
+
+```{r warning=F}
+
+biodat = summaryBy( totshtbiom.meanf ~ yr + site + sample., data = dat2[dat2$trt=="gr",], FUN=c(meanf) )
+names(biodat) = c("year","site","sample","totshtbiom")
+nd2 = merge(nd,biodat,by=c("site","year","sample"))
+nd = nd2
+
+#calculate standing biomass of previous month
+nd$totshtbiom1 = NA
+for(i in 1:dim(nd)[1]) {
+  if(nd$sample[i]==1) next #ignore sample period 1
+  si = nd$site[i]; yr = nd$year[i]; sa = nd$sample[i] - 1
+  if(length(nd$totshtbiom[nd$site==si&nd$year==yr&nd$sample==sa])==0) next
+  nd$totshtbiom1[i] = nd$totshtbiom[nd$site==si&nd$year==yr&nd$sample==sa]
+}  
+
+#nd$pmC = nd$mC / nd$mANP #consumption as a proportion of ANP: old version
+nd$pmC =  nd$mC / (nd$totshtbiom1+nd$mANP) #consumption as a proportion of standing biomass: new version JDF 12-21-23
+  #note as before there are many negative values
+nd$pmC[nd$pmC==-Inf] = NA #convert div0 to NA
+nd$pmC[nd$pmC==Inf] = NA #convert div0 to NA
+
+#should values below 0 or above 1 be considered or removed? these are cases where grazers ate more than estimated ANP
+#for now, I'll change to NA
+nd$pmC[nd$pmC<0 | nd$pmC > 1] = NA
+
+#let's keep a version of pmC that retains values below 0 and above 1
+#nd$pmC2 = nd$mC / nd$mANP #consumption as a proportion of ANP
+nd$pmC2 =  nd$mC / (nd$totshtbiom1+nd$mANP) #consumption as a proportion of standing biomass: new version JDF 12-21-23
+nd$pmC2[nd$pmC2==-Inf] = NA #convert div0 to NA
+nd$pmC2[nd$pmC2==Inf] = NA #convert div0 to NA
+
+#create a column that, for each row, is the pmC of the previous sample period
+nd$pmC1 = NA #fill column
+nd$pmC1v2 = NA #fill column, version that includes below 0 and above 1 values
+nd$mC1 = NA #fill column, absolute C (not proportion) of previous month **new JDF 12-21-23
+for(i in 1:dim(nd)[1]) {
+  if(nd$sample[i]==1) next #ignore sample period 1
+  si = nd$site[i]; yr = nd$year[i]; sa = nd$sample[i] - 1
+  if(length(nd$pmC[nd$site==si&nd$year==yr&nd$sample==sa])==0) next
+  nd$pmC1[i] = nd$pmC[nd$site==si&nd$year==yr&nd$sample==sa]
+  if(length(nd$pmC[nd$site==si&nd$year==yr&nd$sample==sa])==0) next
+  nd$pmC1v2[i] = nd$pmC2[nd$site==si&nd$year==yr&nd$sample==sa]
+  if(length(nd$mC[nd$site==si&nd$year==yr&nd$sample==sa])==0) next #new JDF 12-21-23
+  nd$mC1[i] = nd$mC[nd$site==si&nd$year==yr&nd$sample==sa] #new JDF 12-21-23
+}
+
+```
+
+This is the annual ANP dataset.
+
+```{r warning=F}
+
+library(doBy)
+sumf = function(x) {sum(x,na.rm=T)}
+ndA = summaryBy (ANP + C ~ year + site, data = newdat, FUN = sumf ) #changed to interval production ("ANP") and consumption("C") to accurately sum processes
+names(ndA)[c(3,4)] = c("ANPP","annualC")
+ndA = ndA[ndA$ANPP>0,] #only 60-odd site-years available, omit NAs
+
+#sum ANP values but ignore negative values
+sumf2 = function(x) {sum(x[x>=0],na.rm=T)}
+ndA2 = summaryBy (ANP ~ year + site, data = newdat, FUN = sumf2 )
+names(ndA2)[3] = "ANPP2"
+ndA = merge(ndA,ndA2,all.x=T)
+
+#sum ANP and C values for green biomass > 50% 
+gsnewdat<- newdat[newdat$percDead < 50,]
+sumf3 = function(x) {sum(x[x>0],na.rm=T)}
+ndA3 = summaryBy (ANP + C ~ year + site, data = gsnewdat, FUN = sumf3 )
+names(ndA3)[c(3,4)] = c("gsANPP2", "gsannualC")
+ndA = merge(ndA,ndA3,all.x=T)
+
+#create another ANPP variable that only totals ANP for periods 2-7 (ignoring negatives)
+newdat.no1 = newdat[newdat$sample!=1,] #take out all sample = 1 values
+ndA2 = summaryBy (mANP ~ year + site, data = newdat.no1, FUN = sumf2 )
+names(ndA2)[3] = "ANPP.no1"
+ndA = merge(ndA,ndA2,all.x=T)
+
+#create another ANPP variable (gsANPP.no1) that only totals ANP for periods 2-7 during the growing season (ignoring negatives)
+gsnewdat.no1 = gsnewdat[gsnewdat$sample!=1,] #take out all sample = 1 values
+ndA2 = summaryBy (mANP ~ year + site, data = gsnewdat.no1, FUN = sumf2 )
+names(ndA2)[3] = "gsANPP.no1"
+ndA = merge(ndA,ndA2,all.x=T)
+
+#create new variable that is sample 1 mANP as a proportion of total (no negatives)
+ndA$s1prop = (ndA$ANPP2-ndA$ANPP.no1) / ndA$ANPP2
+
+#create mean growing season water balance and SPEI variables
+wA = summaryBy (watbal + spei ~ yr + site, data = dat, FUN = mean , keep.names=T)
+names(wA) = c("year","site","wb","spei")
+
+#merge annual and site values
+dat.env2 = datb[,c("yr","site","soilc","soiln","clay","silt","wy.prism","gsppt.prism","siteelevation","gs.temp","Pwy.prism","Pgsppt.prism")]
+names(dat.env2)[1:2] = c("year","site")
+ndA2 = merge(ndA,dat.env2,all.x=T,all.y=F)  
+ndA2 = ndA2[duplicated(ndA2)==F,] 
+#some site-years have multiple values for soil texture; simplify to mean
+meanf = function(x) {mean(x,na.rm=T)}
+ndA3 = summaryBy (. ~ year + site, data = ndA2, FUN = meanf , keep.names=T)
+ndA3 = merge(ndA3,wA)
+
+```
+
+This adds permanent exclosure data to the annual (ndA3) dataset (= 'annual').
+
+```{r warning=F}
+#grab pe treatments for full and growing season only 
+dpe = dat[dat$trt=="pe",]
+gsdpe <- dpe[dpe$percDead < 50,]
+  
+#simplify to mean biomass per sample period
+meanf = function(x) {mean(x,na.rm=T)}
+sef = function(x) {sd(x,na.rm=T) / sqrt(length(x))}
+dpe2 = summaryBy( totshtbiom ~ yr + site + sample. + days.1 + juldate, data = dpe, FUN=c(meanf,sef) , keep.names=T)
+
+#simplify to mean biomass per sample period for growing season only
+gsdpe2 = summaryBy( totshtbiom ~ yr + site + sample. + days.1 + juldate, data = gsdpe, FUN=c(meanf,sef) , keep.names=T)
+
+#assume ANPP is estimated by peak (max) biomass for full season
+maxf = function(x) {max(x,na.rm=T)}
+dpe3 = summaryBy( totshtbiom.meanf ~ yr + site, data = dpe2, FUN=c(maxf), keep.names=T)
+names(dpe3)[c(1,3)] = c("year","ANPP.pe")
+
+#assume ANPP is estimated by peak (max) biomass for growing season
+gsdpe3 = summaryBy( totshtbiom.meanf ~ yr + site, data = gsdpe2, FUN=c(maxf), keep.names=T)
+names(gsdpe3)[c(1,3)] = c("year","gsANPP.pe")
+gsdpe3$site = as.factor(gsdpe3$site)
+
+#add pe values to ndA3 dataset
+annual = merge(ndA3,dpe3,all.x=T)
+annual = merge(annual,gsdpe3,all.x=T)
+  
+#I’ll make a new dependent variable that is the difference between ANPP and ANPP.pe, and model this as we did above.
+annual$Adiff = annual$ANPP - annual$ANPP.pe #positive values indicate grazer stimulation
+annual$gsAdiff = annual$gsANPP2 - annual$gsANPP.pe #positive values indicate grazer stimulation
+#version ignoring negative monthly ANP values
+annual$Adiff2 = annual$ANPP2 - annual$ANPP.pe #positive values indicate grazer stimulation
+#for growing season
+annual$gsAdiff2 = annual$gsANPP2 - annual$gsANPP.pe #positive values indicate grazer stimulation
+
+```
+
+
+# Results
+
+## 1. Grazing intensity {.tabset}
+
+Grazing intensities were different during the three different studies.
+
+### Stats
+
+### Figure 2
+
+A decline in grazing after wolf reintroduction (1999-1001, due to predation on elk), greater grazing intensities after bison populations increased (2012-2014). (Fig. 2)
+
+Fig. 2. The relationship of consumption (g/m2) on ANPP in grazed grassland for each of the three studies.
+
+## 2. Monthly ANP {.tabset}
+
+lme3b (line 398) showing monthly production (for samples ANP\>= 0) as a function of temp, % green biomass, consumption (g/m2), and a soil C 1: ppt interaction. Including mANP values \< 0 introduced a false second-order grazing effect- we should illustrate this in Fig 3.
+
+### Stats
+
+```{r warning=F, message=F, cols.print=8, rows.print=15}
+library(lme4)
+library(lmerTest)
+library(performance) 
+
+#scaled dataset
+ndS = data.frame(rain=scale(nd$prism.pptday),temp=scale(nd$prismint.temp),wb=scale(nd$watbal),
+                 spei=scale(nd$spei),melt=scale(nd$postmelt),soilC=scale(nd$soilc),
+                 green=scale(1-nd$PpercDead),consump=scale(nd$mC1),mANP=nd$mANP1,sample=nd$sample,
+                 year=nd$year,site=nd$site)
+
+#lme3b = lmer(mANP ~ rain + temp + I(temp^2) + soilC + consump + green + rain:temp + rain:soilC + temp:soilC + rain:consump + temp:consump + soilC:consump + (1|year)+(1|site), data=ndS,subset=ndS$sample!=1)
+#as.data.frame(round(summary(lme3b)$coef,2))
+#r2_nakagawa(lme3b)
+
+#lme3c = lmer(mANP ~ spei + temp + soilC + consump + green + spei:temp + temp:soilC + spei:soilC + spei:consump + temp:consump + soilC:consump + (1|year)+(1|site), data=ndS,subset=ndS$sample!=1)
+#summary(lme3c)
+#as.data.frame(round(summary(lme3c)$coef,2))
+
+
+#better model replaces rainfall with water balance (rain - PET)
+lme3d = lmer(mANP ~ wb + temp + soilC + consump + green + wb:temp + wb:soilC + temp:soilC + wb:consump + temp:consump + soilC:consump + (1|year)+(1|site), data=ndS,subset=ndS$sample!=1)
+as.data.frame(round(summary(lme3d)$coef,2))
+r2_nakagawa(lme3d)
+#anova(lme3b,lme3d)
+  #wb linearizes temp effect, very strong, and temp^2 no longer supported
+  #if SPEI (modified Palmer index) used instead of WB, the water:temp interaction goes down
+    #and the main effect of water (SPEI) goes up, but this is because of how SPEI is calculated
+    #AIC is best with water balance for water variable, so sticking with that
+
+#snowmelt timing is a very important predictor too (here just a main effect)
+  #But strongly collinear with green biomass
+  #so keep model with green rather than melt?
+#lme3e = lmer(mANP ~ melt + wb + temp + soilC + green + consump + wb:temp + wb:soilC + temp:soilC + wb:consump + temp:consump + soilC:consump + (1|year)+(1|site), data=ndS,subset=ndS$sample!=1)
+#as.data.frame(round(summary(lme3e)$coef,2))
+#r2_nakagawa(lme3e)
+#anova(lme3e,lme3d) #P<0.00001, in support of including post melt
+
+```
+
+### Figure 3
+
+Fig. 3. Controls on monthly ANP. A figure that illustrates the salient features of the results of lme3 and lme3b.
+
+## 3. Annual ANP {.tabset}
+
+### Stats
+
+(a) Ungrazed ANPP (lme6.pe, line 622) is a function interactions of soil C with ppt and temp, and ppt:temp interaction. So climate and site conditions are important. Jason examined water balance and SPEI but neither outperformed rainfall, so keeping the original lme6.pe model:
+
+
+```{r warning=F, message=F}
+
+#Ungrazed: original model (lme6.pe) remains better than using wb or spei
+lme6.pe= lmer(ANPP.pe ~ scale(gsppt.prism) + scale(gs.temp) + scale(soilc):scale(gsppt.prism)+ scale(soilc):scale(gs.temp) + scale(gsppt.prism):scale(gs.temp)+ +scale(gsppt.prism)+ scale(gs.temp)
+              +  scale(soilc)+ (1|year) + (1|site), data=annual)
+as.data.frame(round(summary(lme6.pe)$coef,2))
+#r2_nakagawa(lme6.pe) 
+
+#compare to using water balance or spei for temp:rain
+#lme7.pe= lmer(ANPP.pe ~ scale(wb) + scale(gs.temp) + scale(soilc):scale(wb)+ scale(soilc):scale(gs.temp)
+#              + scale(wb):scale(gs.temp) + scale(soilc)+ (1|year) + (1|site), data=annual)
+#summary(lme7.pe)
+
+#lme8.pe= lmer(ANPP.pe ~ scale(spei) + scale(gs.temp) + scale(soilc):scale(spei)+ scale(soilc):scale(gs.temp)
+#              + scale(spei):scale(gs.temp) + scale(soilc)+ (1|year) + (1|site), data=annual)
+#summary(lme8.pe)
+   
+#anova(lme6.pe,lme7.pe,lme8.pe) #original rain:temp interaction model still the best
+```
+
+(b) Grazed ANPP is a function of consumption, primarily, and a ppt:temp interaction (lme6, line 627) - it includes all samples, even those with negative annual consumption. The model explains 46.8% of the variation. Will need to explain the negative consumption values. Jason tried replacing rainfall with water balance and SPEI. The latter was about equivalent to using rainfall. For simplicity, kept the prior model:
+
+```{r warning=F, message=F}
+#Grazed:
+
+lme6 = lmer(ANPP2 ~ scale(annualC):scale(soilc)+ scale(soilc):scale(gsppt.prism) + 
+              scale(soilc):scale(gs.temp) + scale(gsppt.prism):scale(gs.temp) +   
+              scale(annualC):scale(gs.temp)+scale(annualC):scale(gsppt.prism) +
+              scale(gsppt.prism)+ scale(gs.temp)+ scale(soilc)+ scale(annualC)+ 
+              (1|year) + (1|site), data=ndA3)
+as.data.frame(round(summary(lme6)$coef,2))
+r2_nakagawa(lme6) 
+
+#is water balance or SPEI better?
+#lme7 = lmer(ANPP2 ~ scale(annualC):scale(soilc)+ scale(soilc):scale(wb) + 
+#              scale(soilc):scale(gs.temp) + scale(wb):scale(gs.temp) +   
+#              scale(annualC):scale(gs.temp)+scale(annualC):scale(wb) +
+#              scale(wb)+ scale(gs.temp)+ scale(soilc)+ scale(annualC)+ 
+#              (1|year) + (1|site), data=ndA3)
+#summary(lme7)
+
+#lme8 = lmer(ANPP2 ~ scale(annualC):scale(soilc)+ scale(soilc):scale(spei) + 
+#              scale(soilc):scale(gs.temp) + scale(spei):scale(gs.temp) +   
+#              scale(annualC):scale(gs.temp)+scale(annualC):scale(spei) +
+#              scale(spei)+ scale(gs.temp)+ scale(soilc)+ scale(annualC)+ 
+#              (1|year) + (1|site), data=ndA3)
+#summary(lme8)
+
+#anova(lme6,lme7,lme8) #lme6 is still best, although basically equivalent with SPEI
+
+```
+
+### Figure 4
+
+Fig 4. Controls on ANPP. Let’s discuss.
+
+## 4. Proportion ANPP stimulated {.tabset}
+
+Proportion ANPP stimulated: The proportion stimulated (loglme6c, line 667) was associated with grazing intensity – the overall variation explained by the model however could not be calculated. The log-log transformation wasn’t great, but improved the distribution somewhat. Because would expect grassland response to grazing to be greater when plants are physiologically active, also modeled stimulation during the growing season when biomass was \>= 50% green (loggslme6, line 682). During the “growing season, the percentage shoot growth stimulation was a function of grazing intensity and soil C.
+
+### Stats
+
+```{r warning=F, message=F}
+
+#lme6c log-log transformed
+loglme6c= lmer(log(1+(Adiff2/ANPP.pe)) ~ scale(soilc) + scale(gsppt.prism) + 
+                 scale(log(1+(annualC/ANPP2))) + scale(soilc):scale(gsppt.prism) + 
+                   scale(gsppt.prism) : scale(log(1+(annualC/ANPP2))) + 
+                 scale(soilc) : scale(log(1+(annualC/ANPP2))) + (1|year), data=annual)
+                 #(1|site), data=annual)
+    #within-site variance not possible, could be NAs are reducing within-site sample sizes 
+as.data.frame(round(summary(loglme6c)$coef,2))
+r2_nakagawa(loglme6c) #17% R2
+
+
+```
+
+### Figure 5
+
+Fig. 5 Controls on grazer stimulation. Let’s discuss.
+
+## 5. Synthesis
+
+Some synthesizing illustration?
+
+## 6. Appendices
+
+-A map of study site locations
+
+-Table showing elevation, years sampled, soil C and N, mean plant biomass
+
+-Figure of monthly ANP rates for each site and each year sampled-similar to what you have generated already. 
+
+-Other figures/tables to report modeling results?
+
+-correlation matrices of covariates
